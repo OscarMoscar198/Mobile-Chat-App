@@ -4,7 +4,7 @@ import React, {
   useLayoutEffect,
   useCallback,
 } from "react";
-import { View, Text, TouchableOpacity } from "react-native";
+import { View, Text, TouchableOpacity, Alert, StyleSheet } from "react-native";
 import { GiftedChat, Actions, ActionsProps } from "react-native-gifted-chat";
 import {
   collection,
@@ -13,11 +13,12 @@ import {
   query,
   onSnapshot,
 } from "firebase/firestore";
-import { Video } from "expo-av";
 import { auth, database, storage } from "../config/firebase";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { AntDesign } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
+import { Audio, Video } from "expo-av";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import colors from "../theme/colors";
 
@@ -63,6 +64,7 @@ const PrivateChat = () => {
           user: doc.data().user,
           image: doc.data().image,
           video: doc.data().video,
+          audio: doc.data().audio,
         }))
       );
     });
@@ -76,7 +78,7 @@ const PrivateChat = () => {
   const onSend = useCallback(
     (messages = []) => {
       const chatId = getPrivateChatId(auth.currentUser?.uid, userId);
-      const { _id, createdAt, text, user, image, video } = messages[0];
+      const { _id, createdAt, text, user, image, video, audio } = messages[0];
       setMessages((previousMessages: any) =>
         GiftedChat.append(previousMessages, messages)
       );
@@ -87,24 +89,23 @@ const PrivateChat = () => {
         user,
         image: image || null,
         video: video || null,
+        audio: audio || null,
       });
     },
     [userId]
   );
 
-  const pickMedia = async () => {
+  const pickMedia = async (mediaType: ImagePicker.MediaTypeOptions) => {
     const permissionResult =
       await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    if (!permissionResult.granted) {
-      alert(
-        "You've refused to allow this app to access your photos and videos!"
-      );
+    if (permissionResult.granted === false) {
+      alert("You've refused to allow this app to access your media!");
       return;
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      mediaTypes: mediaType,
       allowsEditing: true,
       aspect: [4, 3],
       quality: 1,
@@ -114,9 +115,8 @@ const PrivateChat = () => {
       const asset = result.assets[0];
       const response = await fetch(asset.uri);
       const blob = await response.blob();
-      const fileType = asset.mediaType === "video" ? "videos" : "images";
       const fileName = asset.uri.split("/").pop();
-      const storageRef = ref(storage, `${fileType}/${fileName}`);
+      const storageRef = ref(storage, `chat_media/${fileName}`);
       await uploadBytes(storageRef, blob);
       const downloadURL = await getDownloadURL(storageRef);
       onSend([
@@ -128,22 +128,45 @@ const PrivateChat = () => {
             _id: auth.currentUser?.uid ?? "0",
             name: auth.currentUser?.email ?? "Unknown User",
           },
-          image: asset.mediaType === "image" ? downloadURL : null,
-          video: asset.mediaType === "video" ? downloadURL : null,
+          image:
+            mediaType === ImagePicker.MediaTypeOptions.Images
+              ? downloadURL
+              : null,
+          video:
+            mediaType === ImagePicker.MediaTypeOptions.Videos
+              ? downloadURL
+              : null,
         },
       ]);
     }
   };
 
-  const renderActions = (props: Readonly<ActionsProps>) => (
-    <Actions
-      {...props}
-      options={{
-        ["Choose From Library"]: pickMedia,
-      }}
-      icon={() => <AntDesign name="plus" size={24} color={colors.gray} />}
-    />
-  );
+  const pickAudio = async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: "audio/*",
+    });
+
+    if (result.type === "success") {
+      const response = await fetch(result.uri);
+      const blob = await response.blob();
+      const fileName = result.name;
+      const storageRef = ref(storage, `chat_audio/${fileName}`);
+      await uploadBytes(storageRef, blob);
+      const downloadURL = await getDownloadURL(storageRef);
+      onSend([
+        {
+          _id: Date.now().toString(),
+          createdAt: new Date(),
+          text: "",
+          user: {
+            _id: auth.currentUser?.uid ?? "0",
+            name: auth.currentUser?.email ?? "Unknown User",
+          },
+          audio: downloadURL,
+        },
+      ]);
+    }
+  };
 
   const renderMessageVideo = (props) => {
     const { currentMessage } = props;
@@ -151,14 +174,31 @@ const PrivateChat = () => {
       <View style={{ padding: 10 }}>
         <Video
           source={{ uri: currentMessage.video }}
-          style={{ width: 200, height: 200 }}
-          useNativeControls
-          resizeMode="contain"
+          rate={1.0}
+          volume={1.0}
+          isMuted={false}
+          resizeMode="cover"
+          shouldPlay
           isLooping
+          style={{ width: 200, height: 200 }}
         />
       </View>
     );
   };
+
+  const renderActions = (props: Readonly<ActionsProps>) => (
+    <Actions
+      {...props}
+      options={{
+        ["Choose Image From Library"]: () =>
+          pickMedia(ImagePicker.MediaTypeOptions.Images),
+        ["Choose Video From Library"]: () =>
+          pickMedia(ImagePicker.MediaTypeOptions.Videos),
+        ["Choose Audio From Library"]: pickAudio,
+      }}
+      icon={() => <AntDesign name="plus" size={24} color={colors.gray} />}
+    />
+  );
 
   return (
     <GiftedChat
